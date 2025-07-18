@@ -1,17 +1,28 @@
-use crate::ast::{Stmt, Expr, Function, BinOp};
 use std::collections::HashMap;
+use crate::ast::{Stmt, Expr, Function, BinOp, LogicalOp, UnaryOp};
 
+// Os tipos de valores
 #[derive(Debug, Clone)]
 pub enum Value {
     Number(i64),
+    Bool(bool),
     Void,
 }
 
+//O tratamento desses valores
 impl Value {
     fn as_number(&self) -> i64 {
         match self {
             Value::Number(n) => *n,
-            Value::Void => panic!("Tentativa de usar void como número"),
+            _ => panic!("Tentativa de usar não-número como número"),
+        }
+    }
+
+    fn is_truthy(&self) -> bool {
+        match self {
+            Value::Bool(b) => *b,
+            Value::Number(n) => *n != 0,
+            Value::Void => false,
         }
     }
 }
@@ -63,6 +74,7 @@ impl Interpreter {
     }
 
     fn execute_statement(&mut self, stmt: &Stmt) -> Result<Value, RuntimeError> {
+        //Tal como havia nos exemplos do Lox, temos o uso de statements
         match stmt {
             Stmt::VarDecl { name, value } => {
                 let val = self.evaluate_expression(value)?;
@@ -76,12 +88,63 @@ impl Interpreter {
             Stmt::ExprStmt(expr) => {
                 self.evaluate_expression(expr)
             }
+            Stmt::If { condition, then_branch, else_branch } => {
+                let condition_value = self.evaluate_expression(condition)?;
+                if condition_value.is_truthy() {
+                    self.execute_statements(then_branch)
+                } else if let Some(else_stmts) = else_branch {
+                    self.execute_statements(else_stmts)
+                } else {
+                    Ok(Value::Void)
+                }
+            }
+            Stmt::While { condition, body } => {
+                let mut last_value = Value::Void;
+                loop {
+                    let condition_value = self.evaluate_expression(condition)?;
+                    if !condition_value.is_truthy() {
+                        break;
+                    }
+                    last_value = self.execute_statements(body)?;
+                }
+                Ok(last_value)
+            }
+            Stmt::For { init, condition, update, body } => {
+                let mut last_value = Value::Void;
+
+                // Executa inicialização, se houver
+                if let Some(init_stmt) = init {
+                    self.execute_statement(init_stmt)?;
+                }
+
+                loop {
+                    // Verifica condição, caso haja
+                    if let Some(cond_expr) = condition {
+                        let condition_value = self.evaluate_expression(cond_expr)?;
+                        if !condition_value.is_truthy() {
+                            break;
+                        }
+                    }
+
+                    // Executa o corpo do código
+                    last_value = self.execute_statements(body)?;
+
+                    // Executa atualização, se tiver
+                    if let Some(update_expr) = update {
+                        self.evaluate_expression(update_expr)?;
+                    }
+                }
+
+                Ok(last_value)
+            }
         }
     }
 
     fn evaluate_expression(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
         match expr {
             Expr::Number(n) => Ok(Value::Number(*n)),
+
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
 
             Expr::Var(name) => {
                 if let Some(value) = self.locals.get(name) {
@@ -95,27 +158,77 @@ impl Interpreter {
                 let left_val = self.evaluate_expression(lhs)?;
                 let right_val = self.evaluate_expression(rhs)?;
 
-                let left_num = left_val.as_number();
-                let right_num = right_val.as_number();
+                match op {
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                        let left_num = left_val.as_number();
+                        let right_num = right_val.as_number();
 
-                let result = match op {
-                    BinOp::Add => left_num + right_num,
-                    BinOp::Sub => left_num - right_num,
-                    BinOp::Mul => left_num * right_num,
-                    BinOp::Div => {
-                        if right_num == 0 {
-                            return Err(RuntimeError::DivisionByZero);
-                        }
-                        left_num / right_num
+                        let result = match op {
+                            BinOp::Add => left_num + right_num,
+                            BinOp::Sub => left_num - right_num,
+                            BinOp::Mul => left_num * right_num,
+                            BinOp::Div => {
+                                if right_num == 0 {
+                                    return Err(RuntimeError::DivisionByZero);
+                                }
+                                left_num / right_num
+                            }
+                            _ => unreachable!(),
+                        };
+
+                        Ok(Value::Number(result))
                     }
-                };
+                    BinOp::Equal => Ok(Value::Bool(self.values_equal(&left_val, &right_val))),
+                    BinOp::NotEqual => Ok(Value::Bool(!self.values_equal(&left_val, &right_val))),
+                    BinOp::Greater => Ok(Value::Bool(left_val.as_number() > right_val.as_number())),
+                    BinOp::GreaterEqual => Ok(Value::Bool(left_val.as_number() >= right_val.as_number())),
+                    BinOp::Less => Ok(Value::Bool(left_val.as_number() < right_val.as_number())),
+                    BinOp::LessEqual => Ok(Value::Bool(left_val.as_number() <= right_val.as_number())),
+                }
+            }
 
-                Ok(Value::Number(result))
+            Expr::Logical { op, lhs, rhs } => {
+                let left_val = self.evaluate_expression(lhs)?;
+
+                match op {
+                    LogicalOp::And => {
+                        if !left_val.is_truthy() {
+                            Ok(left_val)
+                        } else {
+                            self.evaluate_expression(rhs)
+                        }
+                    }
+                    LogicalOp::Or => {
+                        if left_val.is_truthy() {
+                            Ok(left_val)
+                        } else {
+                            self.evaluate_expression(rhs)
+                        }
+                    }
+                }
+            }
+
+            Expr::Unary { op, expr } => {
+                let val = self.evaluate_expression(expr)?;
+
+                match op {
+                    UnaryOp::Not => Ok(Value::Bool(!val.is_truthy())),
+                    UnaryOp::Minus => Ok(Value::Number(-val.as_number())),
+                }
             }
 
             Expr::Call { name, args } => {
                 self.call_function(name, args)
             }
+        }
+    }
+
+    fn values_equal(&self, left: &Value, right: &Value) -> bool {
+        match (left, right) {
+            (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Void, Value::Void) => true,
+            _ => false,
         }
     }
 
@@ -137,7 +250,7 @@ impl Interpreter {
         // Salva o estado atual das variáveis locais
         let saved_locals = self.locals.clone();
 
-        // Avalia os argumentos e cria novos bindings
+        // Avalia os argumentos!
         for (param, arg) in function.params.iter().zip(args.iter()) {
             let arg_value = self.evaluate_expression(arg)?;
             self.locals.insert(param.clone(), arg_value);
@@ -157,6 +270,7 @@ impl Interpreter {
     }
 }
 
+//Basicamente, gestão de erros e comportamentos anôMalos
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

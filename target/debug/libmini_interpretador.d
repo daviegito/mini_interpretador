@@ -1,1 +1,0 @@
-/home/daviegito/git/mini_interpretador/target/debug/libmini_interpretador.rlib: /home/daviegito/git/mini_interpretador/src/ast.rs /home/daviegito/git/mini_interpretador/src/interpreter.rs /home/daviegito/git/mini_interpretador/src/lexer.rs /home/daviegito/git/mini_interpretador/src/lib.rs /home/daviegito/git/mini_interpretador/src/parser.rs
